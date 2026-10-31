@@ -105,7 +105,50 @@ local ESPObjects = {}
 local SharedRayParams = RaycastParams.new()
 SharedRayParams.FilterType = Enum.RaycastFilterType.Exclude
 SharedRayParams.FilterDescendantsInstances = {}
+local SharedIgnore = table.create(2)
+local CHAMS_STRIDE = 3
+local FrameCounter = 0
 
+local R6_SIZES = {
+    Head = Vector3.new(1, 1, 1),
+    Torso = Vector3.new(2, 2, 1.5),
+    LeftArm = Vector3.new(1, 2, 1),
+    RightArm = Vector3.new(1, 2, 1),
+    LeftLeg = Vector3.new(1, 2, 1),
+    RightLeg = Vector3.new(1, 2, 1),
+}
+
+local EXACT_LOOKUP = {}
+for key, names in pairs({
+    Head = {"Head"}, Torso = {"Torso", "UpperTorso", "HumanoidRootPart"},
+    LeftArm = {"LeftArm", "LeftUpperArm"}, RightArm = {"RightArm", "RightUpperArm"},
+    LeftLeg = {"LeftLeg", "LeftUpperLeg"}, RightLeg = {"RightLeg", "RightUpperLeg"},
+}) do
+    for _, n in ipairs(names) do EXACT_LOOKUP[n] = key end
+end
+
+local KEYWORDS = {
+    Head = {"head"},
+    Torso = {"torso", "chest", "spine", "hip", "upper", "lower", "body"},
+    LeftArm = {"leftarm", "left arm", "left_arm", "arm_l", "l_arm"},
+    RightArm = {"rightarm", "right arm", "right_arm", "arm_r", "r_arm"},
+    LeftLeg = {"leftleg", "left leg", "left_leg", "leg_l", "l_leg"},
+    RightLeg = {"rightleg", "right leg", "right_leg", "leg_r", "r_leg"},
+}
+
+local function ResolveKey(part)
+    local key = EXACT_LOOKUP[part.Name]
+    if key then return key end
+    local lower = string.lower(part.Name)
+    for k, kws in pairs(KEYWORDS) do
+        for i = 1, #kws do
+            if string.find(lower, kws[i], 1, true) then
+                return k
+            end
+        end
+    end
+    return nil
+end
 local PixelFont = Font.new(
     "rbxassetid://16658248641",
     Enum.FontWeight.Regular,
@@ -485,7 +528,6 @@ ESPObjects[Player] = Container
     Visible = false,
 })
 
-
 local Stroke = Instance.new("UIStroke")
 Stroke.Parent = Healthbar
 Stroke.Color = Color3.fromRGB(0, 0, 0)
@@ -634,48 +676,106 @@ local FFLabel = Create("TextLabel", {
 
 Container.FFLabel = FFLabel
 local function UpdateCollisionBoxes(character)
+Container.AttachPart = function(part, key)
+    if not part or not part.Parent then return end
+    if not Container.MaterialProps then Container.MaterialProps = {} end
+    if not Container.AdornMap then Container.AdornMap = {} end
+    if not Container.AdornList then Container.AdornList = {} end
+
+    if not Container.MaterialProps[part] then
+        Container.MaterialProps[part] = {
+            Material = part.Material,
+            Color = part.Color,
+            Transparency = part.Transparency,
+        }
+    end
+
+    part.Material = Enum.Material.Neon
+    part.Color = ESP.Drawing.Chams.OutlineRGB
+    if math.abs(part.Transparency - 1) > 0.005 then
+        part.Transparency = 1
+    end
+
+    if not Container.AdornMap[part] then
+        local stdSize = R6_SIZES[key]
+        if stdSize then
+            local adorn = Instance.new("BoxHandleAdornment")
+            adorn.Adornee = part
+            adorn.Size = stdSize * 1.05
+            adorn.Color3 = ESP.Drawing.Chams.OutlineRGB or Color3.fromRGB(220, 240, 255)
+            adorn.Transparency = ESP.Drawing.Chams.OutlineTransparency or 0.08
+            adorn.AlwaysOnTop = true
+            adorn.ZIndex = 10
+            adorn.Parent = Container.CollisionBoxes
+            Container.AdornMap[part] = adorn
+            Container.AdornList[#Container.AdornList + 1] = adorn
+        end
+    end
+end
+
+Container.DetachPart = function(part)
+    if not part then return end
+
+    local props = Container.MaterialProps and Container.MaterialProps[part]
+    if props then
+        if part.Parent then
+            part.Material = props.Material
+            part.Color = props.Color
+            part.Transparency = props.Transparency
+        end
+        Container.MaterialProps[part] = nil
+    end
+
+    local adorn = Container.AdornMap and Container.AdornMap[part]
+    if adorn then
+        adorn:Destroy()
+        Container.AdornMap[part] = nil
+        local list = Container.AdornList
+        for i = #list, 1, -1 do
+            if list[i] == adorn then
+                table.remove(list, i)
+                break
+            end
+        end
+    end
+
+    if Container._foundParts then
+        for k, v in pairs(Container._foundParts) do
+            if v == part then Container._foundParts[k] = nil break end
+        end
+    end
+end
     if not character then return end
 
-    
     local now = tick()
     if now - (Container._lastCollisionUpdate or 0) < 0.2 then
         return
     end
     Container._lastCollisionUpdate = now
 
-    
     if not Container.CollisionBoxes or Container.CollisionBoxes.Parent ~= character then
         if Container.CollisionBoxes then Container.CollisionBoxes:Destroy() end
         Container.CollisionBoxes = Instance.new("Folder")
         Container.CollisionBoxes.Name = "CollisionBoxes"
         Container.CollisionBoxes.Parent = character
+        Container.AdornMap = {}
+        Container.AdornList = {}
+        Container._foundParts = nil
     end
 
-    local r6Sizes = { Head = Vector3.new(1, 1, 1), Torso = Vector3.new(2, 2, 1.5), LeftArm = Vector3.new(1, 2, 1), RightArm = Vector3.new(1, 2, 1), LeftLeg = Vector3.new(1, 2, 1), RightLeg = Vector3.new(1, 2, 1) }
-    local exactMatch = { Head = {"Head"}, Torso = {"Torso", "UpperTorso", "HumanoidRootPart"}, LeftArm = {"LeftArm", "LeftUpperArm"}, RightArm = {"RightArm", "RightUpperArm"}, LeftLeg = {"LeftLeg", "LeftUpperLeg"}, RightLeg = {"RightLeg", "RightUpperLeg"} }
-    local keywords = { Head = {"head"}, Torso = {"torso", "chest", "spine", "hip", "upper", "lower", "body"}, LeftArm = {"leftarm", "left arm", "left_arm", "arm_l", "l_arm"}, RightArm = {"rightarm", "right arm", "right_arm", "arm_r", "r_arm"}, LeftLeg = {"leftleg", "left leg", "left_leg", "leg_l", "l_leg"}, RightLeg = {"rightleg", "right leg", "right_leg", "leg_r", "r_leg"} }
+    local foundParts = Container._foundParts
+    if not foundParts then
+        foundParts = {}
+        Container._foundParts = foundParts
+    else
+        for k in pairs(foundParts) do foundParts[k] = nil end
+    end
 
-    local foundParts = { Head=nil, Torso=nil, LeftArm=nil, RightArm=nil, LeftLeg=nil, RightLeg=nil }
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
-            local nameLower = string.lower(part.Name)
-            local matchedKey = nil
-            for key, names in pairs(exactMatch) do
-                for _, exactName in ipairs(names) do
-                    if part.Name == exactName then matchedKey = key; break end
-                end
-                if matchedKey then break end
-            end
-            if not matchedKey then
-                for key, kwList in pairs(keywords) do
-                    for _, kw in ipairs(kwList) do
-                        if string.find(nameLower, kw) then matchedKey = key; break end
-                    end
-                    if matchedKey then break end
-                end
-            end
-            if matchedKey and foundParts[matchedKey] == nil then
-                foundParts[matchedKey] = part
+            local key = ResolveKey(part)
+            if key and foundParts[key] == nil then
+                foundParts[key] = part
             end
         end
     end
@@ -685,48 +785,24 @@ local function UpdateCollisionBoxes(character)
         isTeammate = true
     end
 
-    if not isTeammate then
-        if not Container.MaterialProps then Container.MaterialProps = {} end
-        for key, part in pairs(foundParts) do
-            if part and part:IsA("BasePart") then
-                
-                if not Container.MaterialProps[part] then
-                    Container.MaterialProps[part] = { Material = part.Material, Color = part.Color, Transparency = part.Transparency }
-                end
-                part.Material = Enum.Material.Neon
-                part.Color = ESP.Drawing.Chams.OutlineRGB
+    if isTeammate then
+        Container.Chams = Container.CollisionBoxes
+        return
+    end
 
-                local hasAdorn = false
-for _, a in ipairs(Container.CollisionBoxes:GetChildren()) do
-    if a:IsA("BoxHandleAdornment") and a.Adornee == part then
-        hasAdorn = true
-        break
-    end
-end
-if not hasAdorn then
-    local stdSize = r6Sizes[key]
-    if stdSize then
-        local adorn = Instance.new("BoxHandleAdornment")
-        adorn.Adornee = part
-        adorn.Size = stdSize * 1.05
-        adorn.Color3 = ESP.Drawing.Chams.OutlineRGB or Color3.fromRGB(220, 240, 255)
-        adorn.Transparency = ESP.Drawing.Chams.OutlineTransparency or 0.08
-        adorn.AlwaysOnTop = true
-        adorn.ZIndex = 10
-        adorn.Parent = Container.CollisionBoxes
-    end
-end
-            end
+    if not Container.MaterialProps then Container.MaterialProps = {} end
+    if not Container.AdornMap then Container.AdornMap = {} end
+    if not Container.AdornList then Container.AdornList = {} end
+
+    for key, part in pairs(foundParts) do
+        if part and part:IsA("BasePart") then
+            Container.AttachPart(part, key)
         end
     end
 
-    
-    if Container.CollisionBoxes then
-        Container.Chams = Container.CollisionBoxes
-    end
+    Container.Chams = Container.CollisionBoxes
+    Container.UpdateCollisionBoxes = UpdateCollisionBoxes
 end
-Container.Chams = Container.CollisionBoxes
-Container.UpdateCollisionBoxes = UpdateCollisionBoxes
 
 
 if Player.Character then
@@ -746,11 +822,25 @@ end
     Container.CharRemovingConn =
 Player.CharacterRemoving:Connect(function()
     Container.Character = nil
-    Container.Humanoid = nil
-    Container.Root = nil
-    Container.LastPos = nil
-    Container.LastSqDist = nil
-    Container.MaterialProps = nil
+Container.Humanoid = nil
+Container.Root = nil
+Container.LastPos = nil
+Container.LastSqDist = nil
+Container.MaterialProps = nil
+Container.AdornMap = nil
+Container.AdornList = nil
+Container._foundParts = nil
+Container.Tool = nil
+Container.FF = nil
+
+if Container.DescAddedConn then
+    Container.DescAddedConn:Disconnect()
+    Container.DescAddedConn = nil
+end
+if Container.DescRemovedConn then
+    Container.DescRemovedConn:Disconnect()
+    Container.DescRemovedConn = nil
+end
 
     
     if Container.ChildAddedConn then
@@ -780,28 +870,52 @@ Container.CharAddedConn = Player.CharacterAdded:Connect(function(Character)
     Container._displayHealth = nil
     Container._displayRatio = nil
     Container._lastCollisionUpdate = 0
+    Container.Tool = nil
+    Container.FF = nil
 
-    
     if Container.ChildAddedConn then
         Container.ChildAddedConn:Disconnect()
         Container.ChildAddedConn = nil
     end
-
-    task.wait(0.15)
-    if Container.UpdateCollisionBoxes then
-        Container.UpdateCollisionBoxes(Character)
+    if Container.ChildRemovedConn then
+        Container.ChildRemovedConn:Disconnect()
+        Container.ChildRemovedConn = nil
+    end
+    if Container.DescAddedConn then
+        Container.DescAddedConn:Disconnect()
+        Container.DescAddedConn = nil
+    end
+    if Container.DescRemovedConn then
+        Container.DescRemovedConn:Disconnect()
+        Container.DescRemovedConn = nil
     end
 
-    
-    Container.ChildAddedConn = Character.ChildAdded:Connect(function(child)
-        if child:IsA("BasePart")
-            and child.Name ~= "GlowShell"
-            and Container.Character == Character
-        then
-            task.wait(0.05)
-            if Container.UpdateCollisionBoxes and Container.Character == Character then
-                Container.UpdateCollisionBoxes(Character)
-            end
+    task.wait(0.15)
+    if Container.Character ~= Character then return end
+    Container.UpdateCollisionBoxes(Character)
+
+    Container.DescAddedConn = Character.DescendantAdded:Connect(function(d)
+        if Container.Character ~= Character then return end
+        if d:IsA("Tool") then Container.Tool = d return end
+        if d:IsA("ForceField") then Container.FF = d return end
+        if not d:IsA("BasePart") or d.Name == "GlowShell" then return end
+        task.wait(0.05)
+        if Container.Character ~= Character then return end
+        local key = ResolveKey(d)
+        if key then
+            Container.AttachPart(d, key)
+            Container._foundParts = Container._foundParts or {}
+            Container._foundParts[key] = d
+        end
+    end)
+
+    Container.DescRemovedConn = Character.DescendantRemoving:Connect(function(d)
+        if d == Container.Tool then
+            Container.Tool = Character:FindFirstChildOfClass("Tool")
+        elseif d == Container.FF then
+            Container.FF = Character:FindFirstChildOfClass("ForceField")
+        elseif d:IsA("BasePart") then
+            Container.DetachPart(d)
         end
     end)
 end)
@@ -888,11 +1002,10 @@ local function Hide(Container)
     Container.Anchor.Visible = false
     
     
-if Container.CollisionBoxes then
-    for _, child in pairs(Container.CollisionBoxes:GetChildren()) do
-        if child:IsA("BoxHandleAdornment") then
-            child.Visible = false
-        end
+local list = Container.AdornList
+if list then
+    for i = 1, #list do
+        list[i].Visible = false
     end
 end
     
@@ -913,129 +1026,112 @@ local function Show(Container)
     Container.Anchor.Visible = true
 
     
-if Container.CollisionBoxes and ChamsEnabled then
-    for _, child in pairs(Container.CollisionBoxes:GetChildren()) do
-        if child:IsA("BoxHandleAdornment") then
-            child.Visible = true
+if ChamsEnabled then
+    local list = Container.AdornList
+    if list then
+        for i = 1, #list do
+            list[i].Visible = true
         end
     end
 end
 
     if ChamsEnabled and Container.MaterialProps then
-        for part in pairs(Container.MaterialProps) do
-            if part and part.Parent then
-                part.Material = Enum.Material.Neon
-                part.Color = ESP.Drawing.Chams.OutlineRGB
-            end
+    for part in pairs(Container.MaterialProps) do
+        if part and part.Parent then
+            part.Material = Enum.Material.Neon
+            part.Color = ESP.Drawing.Chams.OutlineRGB
+            part.Transparency = 1
         end
     end
 end
+end
 
-local function UpdateESP(Container, Cam, CamPos, ViewportY, Team, GeometryChanged, Layout)
+local function UpdateESP(Container, Cam, CamPos, ViewportY, Team, GeometryChanged, Layout, doChams)
 
-    local Root = ResolveRoot(Container)
-    if not Root then
+    local floor, abs, clamp = math.floor, math.abs, math.clamp
+local w2vp = Cam.WorldToViewportPoint
+
+local Root = ResolveRoot(Container)
+if not Root then
+    Hide(Container)
+    return
+end
+
+local Health = Container.Health
+if Health <= 0 then
+    Hide(Container)
+    return
+end
+
+if TeamCheckEnabled then
+    local PlayerTeam = Container.Team
+    if Team ~= nil and PlayerTeam ~= nil and Team == PlayerTeam then
         Hide(Container)
         return
     end
+end
 
-    local Health = Container.Health
-    if Health <= 0 then
-        Hide(Container)
-        return
-    end
+local Position = Root.Position
 
-    if TeamCheckEnabled then
-        local PlayerTeam = Container.Team
-        if Team ~= nil and PlayerTeam ~= nil and Team == PlayerTeam then
-            Hide(Container)
-            return
-        end
-    end
+local DeltaX = CamPos.X - Position.X
+local DeltaY = CamPos.Y - Position.Y
+local DeltaZ = CamPos.Z - Position.Z
+local SqDist = DeltaX * DeltaX + DeltaY * DeltaY + DeltaZ * DeltaZ
+if SqDist > MaxSqDist then
+    Hide(Container)
+    return
+end
 
-    local Position = Root.Position
+local ScreenPosition, OnScreen = w2vp(Cam, Position)
+if not OnScreen or ScreenPosition.Z <= 0 then
+    Hide(Container)
+    return
+end
 
-    
-    local ScreenPosition, OnScreen = Cam:WorldToViewportPoint(Position)
-    if not OnScreen or ScreenPosition.Z <= 0 then
-        Hide(Container)
-        return
-    end
+Show(Container)
 
-    
-    Show(Container)
+if doChams and ChamsEnabled then
+    SharedIgnore[1] = LocalPlayer.Character
+    SharedIgnore[2] = Container.Character
+    SharedRayParams.FilterDescendantsInstances = SharedIgnore
 
-    local DeltaX = CamPos.X - Position.X
-    local DeltaY = CamPos.Y - Position.Y
-    local DeltaZ = CamPos.Z - Position.Z
-    local SqDist = DeltaX * DeltaX + DeltaY * DeltaY + DeltaZ * DeltaZ
-    if SqDist > MaxSqDist then
-        Hide(Container)
-        return
-    end
-
-
-if ChamsEnabled then
-    local normalT_Adorn = 0.15
-    local wallT_Adorn   = 0.85
-    local normalT_Neon  = 1          
-    local wallT_Neon    = 1          
-
-     
-    if Container.Chams then
-        for _, child in pairs(Container.Chams:GetChildren()) do
-            if child:IsA("BoxHandleAdornment") then
-                local part = child.Adornee
-                if part and part:IsA("BasePart") and part.Parent then
-                    SharedRayParams.FilterDescendantsInstances =
-                        {LocalPlayer.Character, part.Parent, Camera}
-
-                    local origin = CamPos
-                    local targetPos = part.Position
-                    local diff = targetPos - origin
-                    local dist = diff.Magnitude
-                    if dist > 0.1 then
-                        local result = workspace:Raycast(origin, diff.Unit * dist, SharedRayParams)
-                        local t = result and wallT_Adorn or normalT_Adorn
-                        if child.Transparency ~= t then
-                            child.Transparency = t
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    
-    if Container.MaterialProps then
-        for part in pairs(Container.MaterialProps) do
+    local origin = CamPos
+    local adornList = Container.AdornList
+    if adornList then
+        for i = 1, #adornList do
+            local ad = adornList[i]
+            local part = ad.Adornee
             if part and part.Parent then
-                SharedRayParams.FilterDescendantsInstances =
-                    {LocalPlayer.Character, part.Parent, Camera}
-
-                local origin = CamPos
-                local targetPos = part.Position
-                local diff = targetPos - origin
+                local diff = part.Position - origin
                 local dist = diff.Magnitude
                 if dist > 0.1 then
-                    local result = workspace:Raycast(origin, diff.Unit * dist, SharedRayParams)
-                    local t = result and wallT_Neon or normalT_Neon
-
-                    if part.Material ~= Enum.Material.Neon then
-                        part.Material = Enum.Material.Neon
-                    end
-                    if part.Color ~= ESP.Drawing.Chams.OutlineRGB then
-                        part.Color = ESP.Drawing.Chams.OutlineRGB
-                    end
-                    if math.abs(part.Transparency - t) > 0.005 then
-                        part.Transparency = t
+                    local res = Workspace:Raycast(origin, diff, SharedRayParams)
+                    local t = res and 0.85 or 0.15
+                    if ad.Transparency ~= t then
+                        ad.Transparency = t
                     end
                 end
             end
         end
     end
-end
 
+    local props = Container.MaterialProps
+    if props then
+        for part in pairs(props) do
+            if part and part.Parent then
+                if part.Material ~= Enum.Material.Neon then
+                    part.Material = Enum.Material.Neon
+                end
+                if part.Color ~= ESP.Drawing.Chams.OutlineRGB then
+                    part.Color = ESP.Drawing.Chams.OutlineRGB
+                end
+                if abs(part.Transparency - 1) > 0.005 then
+                    part.Transparency = 1
+                end
+            end
+        end
+    end
+end
 
 if GeometryChanged or Position ~= Container.LastPos then
         Container.LastPos = Position
@@ -1088,16 +1184,18 @@ end
             end
         end
         
-local char = Container.Character
-local tool = char and char:FindFirstChildOfClass("Tool")
+local tool = Container.Tool
+if tool and tool.Parent ~= Container.Character then
+    Container.Tool = Container.Character and Container.Character:FindFirstChildOfClass("Tool")
+    tool = Container.Tool
+end
 local weaponName = tool and tool.Name or ""
 if Container.LastWeapon ~= weaponName then
     Container.LastWeapon = weaponName
     Container.Weapon.Text = weaponName
 end
 
-local char2 = Container.Character
-local hasFF = char2 and char2:FindFirstChildOfClass("ForceField") ~= nil
+local hasFF = Container.FF ~= nil and Container.FF.Parent == Container.Character
 if Container.FFLabel.Visible ~= hasFF then
     Container.FFLabel.Visible = hasFF
 end
@@ -1105,12 +1203,11 @@ end
 
 if hasFF then
     local distTextWidth = Container.Distance.TextBounds.X
-    Container.FFLabel.Position = UDim2.new(
-        0.5,
-        distTextWidth / 2 + 0.5,     
-        1,
-        Layout.DistGap
-    )
+    if Container.LastFFDistWidth ~= distTextWidth or Container.LastFFGap ~= Layout.DistGap then
+        Container.LastFFDistWidth = distTextWidth
+        Container.LastFFGap = Layout.DistGap
+        Container.FFLabel.Position = UDim2.new(0.5, distTextWidth / 2 + 0.5, 1, Layout.DistGap)
+    end
 end
     end
 
@@ -1170,7 +1267,7 @@ local newY = (1 - ratio) - 0.02
 end
 
 end
-    Container.LastPos = Position
+    
 end
 
 local function ApplyLayout(Container, Layout)
@@ -1260,7 +1357,16 @@ end
 
 Data.Anchor:Destroy()
 
-Data.Chams:Destroy()
+if Data.Chams then Data.Chams:Destroy() end
+if Data.AdornList then
+    for i = 1, #Data.AdornList do
+        Data.AdornList[i]:Destroy()
+    end
+    Data.AdornList = nil
+end
+Data.AdornMap = nil
+if Data.DescAddedConn then Data.DescAddedConn:Disconnect() end
+if Data.DescRemovedConn then Data.DescRemovedConn:Disconnect() end
 
 if Data.MaterialProps then
     for part, props in pairs(Data.MaterialProps) do
@@ -1359,18 +1465,21 @@ else
 end
 
     local CamPos = CamCF.Position
-    local Team = LocalTeam
+local Team = LocalTeam
 
-    for Index = 1, PlayerCount do
-        UpdateESP(
-            PlayerList[Index],
-            Cam,
-            CamPos,
-            ViewportY,
-            Team,
-            GeometryChanged,
-            Layout
-        )
-    end
+FrameCounter = (FrameCounter + 1) % CHAMS_STRIDE
+
+for Index = 1, PlayerCount do
+    UpdateESP(
+        PlayerList[Index],
+        Cam,
+        CamPos,
+        ViewportY,
+        Team,
+        GeometryChanged,
+        Layout,
+        (Index % CHAMS_STRIDE) == FrameCounter
+    )
+end
 
 end)
